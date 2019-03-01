@@ -1,0 +1,168 @@
+ PROGRAM observa
+
+C Formats
+   10 FORMAT(A)
+   20 FORMAT(2X,3(F14.7,1X))
+   30 FORMAT(2X,A4,1X,5A2)
+   32 FORMAT(2X,A20)
+   40 FORMAT(2X,F4.1,1X,A1)
+   50 FORMAT(2X,I4,4(1X,I2),1X,F11.8)
+   60 FORMAT(2X,2(I2,1X),F11.8)
+   70 FORMAT(2X,F8.2)
+
+
+      IMPLICIT NONE
+      INTEGER annioi,mesi,diai,horai,mini,horaf,minf,nsat,nnep,niden(85)
+     1  ,i,nep
+C       annioi,mesi,diai,horai,mini: date & initial epoch of observation
+C       horaf,minf: final epoch of observation
+C       nsat:total number of satellites in order for observation day
+C       nnep:total number of epochs to observe
+C       niden:total number of satellites available
+C       i:counter
+C       nep:total number of epochs for which there are satellite positions
+      DOUBLE PRECISION seci,secf,inter,xo,yo,zo,umb,dnnep,lato,lono
+     *  ,xor,yor,zor,dh,de,dn
+C       seci:seconds of initial epoch
+C       secf:seconds of final epoch
+C       inter: inteval between consecutive observations
+C       xo,yo,zo:antenna position of receiver in km
+C       umb:elevation threshold (elevation mask)
+C       dnnep:auxiliar variable for calculus of integer number of epochs
+C       lato,lono: observation position latitude and longitude
+C       xor,yor,zor: observer position (NOT antenna)
+C       dh,de,dn:antenna position from observer
+      CHARACTER aux2*2,filein*30,iden(85)*3,estac*4,fecha*20
+     1  ,ssss*4,ddd*3,yy*2,f*1,t*1,cdiaj*3,sat*3,to(5)*2,trer*1
+C       aux2:auxiliar variable to detect relevant information in input file
+C       filein:broadcasted ephemeris file name
+C       iden:arrya with prn of satellites
+C       estac:observation station name
+C       fecha:date of creation of RINEX observation file
+C       ssss:receiver name
+C       ddd:julian date of observation
+C       yy:year of observation
+C       f:number of RINEX file
+C       t:type of RINEX file (navigation)
+C       cdiaj:julian date of observation
+C       sat:one satellite prn
+C       to:types of observable to generate: C1P1P2L1L2
+C       trer: calculate tropospheric error? S/N
+C End declaration variables
+
+
+C Reading input file:
+      OPEN(12,FILE='input.txt')
+
+   99 CONTINUE
+C 1) Receiver coordinates (km)
+  100 CONTINUE
+        READ(12,10,END=500)aux2
+      IF(aux2.NE.'**')GOTO 100
+      BACKSPACE 12
+      READ(12,20) xor,yor,zor
+                        
+C 2) Station name and observable to generate (C1,P1,P2,L1,L2)
+  110 CONTINUE
+        READ(12,10)aux2
+      IF(aux2.NE.'**')GOTO 110
+      BACKSPACE 12
+      READ(12,30) estac,to
+
+C 3) Elevation mask in degrees
+  120 CONTINUE
+        READ(12,10)aux2
+      IF(aux2.NE.'**')GOTO 120
+      BACKSPACE 12
+      READ(12,40) umb,trer
+
+C 4) Date and initial epoch of observation
+  130 CONTINUE
+        READ(12,10)aux2
+      IF(aux2.NE.'**')GOTO 130
+      BACKSPACE 12
+      READ(12,50) annioi,mesi,diai,horai,mini,seci
+
+C 5) Final epoch
+  140 CONTINUE
+        READ(12,10)aux2
+      IF(aux2.NE.'**')GOTO 140
+      BACKSPACE 12
+      READ(12,60) horaf,minf,secf
+
+C 6) Interval between observations
+  150 CONTINUE  
+        READ(12,10)aux2
+      IF(aux2.NE.'**')GOTO 150
+      BACKSPACE 12
+      READ(12,70)inter
+
+C 7) Date of creation of RINEX observation file
+  160 CONTINUE  
+        READ(12,10)aux2
+      IF(aux2.NE.'**')GOTO 160
+      BACKSPACE 12
+      READ(12,32)fecha
+
+C 8) Position of antenna from receiver
+  170 CONTINUE  
+        READ(12,10)aux2
+      IF(aux2.NE.'**')GOTO 170
+      BACKSPACE 12
+      READ(12,'(8X,3F8.4)')dh,de,dn
+C Finished reading input file
+
+C Coordinates of antenna:
+      CALL antena(xor*1.0D3,yor*1.0D3,zor*1.0D3,dh,de,dn,xo,yo,zo)
+        xo=xo/1.0D3
+        yo=yo/1.0D3
+        zo=zo/1.0D3
+
+C Name of RINEX navigation file:
+      ssss='brdc'
+      ddd=cdiaj(annioi,mesi,diai)
+      f='0'
+      yy=CHAR(48+MOD(annioi,100)/10)//CHAR(48+MOD(annioi,10))
+      t='n'
+      filein=ssss//ddd//f//'.'//yy//t
+
+ 
+C Reading broadcasted ephemeris, calculating satellite positions in t-tau,
+C satellite clock error. Record data in files sat//input file
+      CALL lec21(filein,nsat,iden,niden)                                        
+
+C Reading orbit information. Interpolation of data. Satellite position
+C calculation for epoch t-tau. Satellite clock error estimation.
+      nnep=(horaf-horai)*3600+(minf-mini)*60+(secf-seci)
+      dnnep=(horaf-horai)*3600.+(minf-mini)*60.+(secf-seci)
+      nnep=nnep/inter
+
+      DO i=1,nsat
+        sat=iden(i)
+        nep=niden(i)
+        CALL intorb(filein,sat,nep,annioi,mesi,diai,horai,mini,
+     *                  seci,nnep,inter,xo,yo,zo)
+      ENDDO
+      
+C Calculating azimuths and elevations, as well as tropospheric errors, once
+C known elevation of each satellite
+
+      CALL posic(filein,nsat,nnep,xo,yo,zo,estac,iden,trer,lato,lono)
+
+
+C Filtering data with elevation mask given by umb
+      CALL umbral(iden,nsat,nnep,umb,estac)
+
+C Finally, generating RINEX observation file:
+      CALL rinex(fecha,annioi,mesi,diai,horai,mini,seci
+     1          ,nnep,nsat,iden,inter,xor*1000.0d0
+     2          ,yor*1000.0d0,zor*1000.0d0,estac
+     3          ,to,trer,dh,de,dn)
+
+
+      GOTO 99
+
+  500 CONTINUE
+      CLOSE(12)
+
+      END
